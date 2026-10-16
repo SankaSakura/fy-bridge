@@ -1,0 +1,19 @@
+# Keep source text consistent across Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Windows batch entry points require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets must not receive text conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.exe binary
+*.zip binary
+*.woff binary
+*.woff2 binary

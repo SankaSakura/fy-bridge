@@ -1,0 +1,32 @@
+:root { color-scheme: light dark; font-family: system-ui, "Microsoft YaHei", sans-serif; background: #152126; color: #e6efee; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 40px 20px; }
+main { max-width: 740px; margin: auto; }
+.eyebrow { letter-spacing: .18em; color: #8ad9c0; font-size: 12px; }
+h1 { font-size: 30px; margin: 12px 0; } h2 { font-size: 18px; }
+.page-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; }
+.close-page-notice { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 16px; border: 1px solid #6ec7ac; border-radius: 999px; background: #24483e; color: #b4f5d9; font-size: 15px; font-weight: 600; }
+p { line-height: 1.7; }
+form, section { background: #1e3035; border: 1px solid #375057; border-radius: 12px; padding: 24px; margin: 24px 0; }
+label { display: block; margin: 0 0 18px; font-size: 14px; }
+input, select { display: block; width: 100%; margin-top: 8px; padding: 12px; color: inherit; background: #142327; border: 1px solid #587078; border-radius: 6px; font: inherit; }
+select { min-width: 0; }
+.hint { color: #b0c2c6; font-size: 13px; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.copy-action { display: flex; align-items: center; gap: 12px; }
+.copy-action button { flex-shrink: 0; }
+.copy-action .hint { min-width: 0; margin: 0; line-height: 1.5; }
+button { padding: 10px 16px; border: 1px solid #6ec7ac; border-radius: 6px; background: #94dfc6; color: #152721; cursor: pointer; font: inherit; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #aeead6; outline-offset: 3px; }
+#disconnect { color: #e6efee; background: transparent; border-color: #81959b; }
+#status { margin: 0; font-weight: 600; } #details { margin-bottom: 0; }
+details { margin: 20px 0; padding: 14px; border: 1px solid #375057; border-radius: 8px; }
+summary { cursor: pointer; }
+details label { margin-top: 18px; }
+.config-lock-label { margin-left: 12px; padding: 3px 8px; border: 1px solid #62696b; border-radius: 4px; color: #c2c8ca; font-size: 12px; }
+#connection-config.is-locked { background: #252e32; border-color: #4a5256; color: #a6afb3; }
+#connection-config.is-locked .hint { color: #969fa3; }
+#connection-config.is-locked input, #connection-config.is-locked select { background: #20272b; border-color: #485156; color: #969fa3; cursor: not-allowed; }
+#connection-config.is-locked button { background: #444e53; border-color: #5a6469; color: #a6afb3; opacity: 1; cursor: not-allowed; }
+[hidden] { display: none !important; }

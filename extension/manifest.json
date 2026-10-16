@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "FY 本地反代",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxd0KbzgN1N72xO3W1BdY+JeR/8yp3r8/LZD03+9hu3+uiEjuHyJpBjEvsqlUCOOeAB8u8wmYv9+zFj1tAz7ZiRr/bDxsqkHnhZSPJlYyTCOYS5MORhUlVEbBVSNv3waFYv5gkXdaOLcobrzeA0VafGp1hRJ2Q4qXQiuUOpTWS4VS324ph/kGtBHBlSAi5ZL1MWezyY9vzanR92Kkmv1hqtKytqfTmwjXaYv6dmtU8OeVE47Z39IQEGi3DIniKlo8JShQcKGG2H+aLEXzCxbWm/7xVpTEjvWUBTIe+rttgUC1SYNRnsh3hj4CH0Y/oVRM/P34Juq49X0WTAGqkwnE5QIDAQAB",
+  "description": "将客户端的文本请求转发到已登录的 FY 专用卡，并通过本地 API 返回回复。",
+  "permissions": ["scripting", "storage", "nativeMessaging", "alarms"],
+  "host_permissions": ["https://aifun.wiki/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "打开 FY 本地反代" }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>安装 FY 浏览器扩展</title>
+  <style>
+    :root { font-family: system-ui, "Microsoft YaHei", sans-serif; color-scheme: light dark; }
+    body { max-width: 680px; margin: 56px auto; padding: 0 24px; line-height: 1.7; }
+    h1 { font-size: 28px; } h2 { font-size: 18px; margin-top: 30px; }
+    input { display: block; box-sizing: border-box; width: 100%; padding: 12px; font: inherit; margin: 12px 0; }
+    button { font: inherit; padding: 8px 16px; cursor: pointer; }
+    #copy-status { min-height: 24px; }
+  </style>
+</head>
+<body>
+  <h1>安装 FY 浏览器扩展</h1>
+  <p>本地启动器已安装。接下来在 __BROWSER_NAME__ 中完成首次加载。</p>
+  <h2>1. 打开扩展管理页</h2>
+  <p>复制下方地址，在浏览器地址栏粘贴并按回车。保留此页，稍后复制扩展目录。</p>
+  <input id="page-address" value="__EXTENSIONS_PAGE__" readonly aria-label="扩展管理页地址" spellcheck="false">
+  <button type="button" data-copy="page-address">复制管理页地址</button>
+  <h2>2. 加载扩展目录</h2>
+  <p>在管理页开启“开发者模式”，点击“加载已解压的扩展程序”，粘贴下方目录并选择。（若已经加载过此扩展，点击其“重新加载”按钮即可。）</p>
+  <input id="extension-directory" value="__EXTENSION_DIRECTORY__" readonly aria-label="扩展目录" spellcheck="false">
+  <button type="button" data-copy="extension-directory">复制扩展目录</button>
+  <p id="copy-status" role="status" aria-live="polite"></p>
+  <script>
+    for (const button of document.querySelectorAll('[data-copy]')) {
+      button.addEventListener('click', async () => {
+        const input = document.getElementById(button.dataset.copy);
+        try {
+          await navigator.clipboard.writeText(input.value);
+          document.getElementById('copy-status').textContent = button.dataset.copy === 'page-address'
+            ? '地址已复制，请在浏览器地址栏粘贴并回车。'
+            : '目录已复制，请粘贴到选择扩展文件夹的窗口。';
+        } catch {
+          input.focus(); input.select();
+          document.getElementById('copy-status').textContent = '内容已选中，请按 Ctrl+C 复制。';
+        }
+      });
+    }
+  </script>
+</body>
+</html>

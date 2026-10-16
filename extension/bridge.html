@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FY 本地反代</title><link rel="stylesheet" href="bridge.css"></head>
+<body><main>
+  <p class="eyebrow">FY BRIDGE</p>
+  <div class="page-heading"><h1>FY 本地反代</h1><p id="close-page-hint" class="close-page-notice" role="status" hidden><span aria-hidden="true">✓</span> 此页可以关闭</p></div>
+  <section aria-live="polite"><p id="status">正在读取后台状态…</p><p id="details" class="hint"></p></section>
+  <form id="connection">
+    <div class="actions"><button id="connect" type="submit">启动反代</button><button id="disconnect" type="button" hidden>停止反代</button></div>
+    <details id="connection-config"><summary>连接配置<span id="config-lock-label" class="config-lock-label" hidden>暂不可修改</span></summary>
+    <p class="hint">专用卡设置：主提示词只填一个空格，其他内容留空；记忆设为 0，不开启其他功能。</p>
+    <label>专用卡地址<input id="card" type="url" required placeholder="粘贴 FY 专用卡的对话页面链接" spellcheck="false"></label>
+    <label>浏览器中已打开的卡片<select id="open-cards"><option value="">正在读取…</option></select></label>
+    <button id="refresh-cards" type="button">刷新卡片列表</button><p id="open-cards-hint" class="hint"></p>
+      <label>本地服务地址<input id="server" value="http://127.0.0.1:43119" type="url" required spellcheck="false"></label>
+      <button id="save-config" type="button">保存配置</button>
+    </details>
+    <details><summary>API 地址、模型与密钥</summary>
+      <label>客户端 API 地址<input id="api-url" value="http://127.0.0.1:43119/v1" type="url" readonly spellcheck="false"></label>
+      <div class="copy-action"><button id="copy-api-url" type="button">复制 API 地址</button><span id="api-url-status" class="hint" aria-live="polite"></span></div>
+      <label>客户端模型名<input id="model" value="fy-current" type="text" readonly spellcheck="false"></label>
+      <div class="copy-action"><button id="copy-model" type="button">复制模型名</button><span id="model-status" class="hint" aria-live="polite"></span></div>
+      <label>API 密钥<input id="token" type="password" readonly autocomplete="off" spellcheck="false"></label>
+      <div class="copy-action"><button id="copy-token" type="button">复制 API 密钥</button><span id="token-status" class="hint" aria-live="polite"></span></div>
+    </details>
+  </form>
+  <section id="recovery" hidden><h2>上次任务需要恢复</h2><p>保留了任务前的原配置。恢复会覆盖对应设置，请先停止在专用卡上的其他操作。</p><button id="restore" type="button">恢复保存的原配置</button></section>
+  <section id="manual" hidden><h2>服务已阻塞</h2><p>请在 fy 手动恢复专用卡原配置，并确认没有仍在运行的生成。</p><button id="unlock" type="button">已手动恢复，解除阻塞</button></section>
+</main><script type="module" src="settings.js"></script></body></html>
