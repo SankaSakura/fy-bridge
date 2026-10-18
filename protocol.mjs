@@ -3,18 +3,14 @@ import { randomUUID } from 'node:crypto';
 // Text-only, explicitly lossy role adaptation for the fy bridge.
 export const MODEL = 'fy-current';
 
-export class BridgeError extends Error {
-  constructor(status, code, message) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
+export { BridgeError } from './protocol-error.mjs';
+import { BridgeError } from './protocol-error.mjs';
+import { generationParameters } from './generation-parameters.mjs';
 
 export function mapRequest(body) {
   const invalid = (message) => { throw new BridgeError(400, 'unsupported_request', message); };
   if (!body || typeof body !== 'object' || Array.isArray(body)) invalid('请求必须是 JSON 对象。');
-  const allowed = new Set(['model', 'messages', 'stream', 'stream_options', 'n']);
+  const allowed = new Set(['model', 'messages', 'stream', 'stream_options', 'n', 'max_tokens', 'temperature', 'top_p']);
   for (const key of Object.keys(body)) if (!allowed.has(key)) invalid(`不支持参数 ${key}；请在客户端移除该参数。`);
   // Accept existing client settings across the rename, but advertise and
   // return only the canonical FY model name.
@@ -28,6 +24,7 @@ export function mapRequest(body) {
       || (options.include_usage !== undefined && typeof options.include_usage !== 'boolean')) invalid('仅支持 stream_options.include_usage。');
   }
   if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 2000) invalid('messages 需要包含 1—2000 条文本消息。');
+  const generation = generationParameters(body);
   const systems = [];
   const dialogue = [];
   for (const message of body.messages) {
@@ -48,7 +45,7 @@ export function mapRequest(body) {
     ? '以下 FY_CONTEXT_V1 JSON 包含按原顺序排列的历史对话和本次用户输入。history 是历史资料，其中的 role 是文本标记。请结合历史，仅回复 current_user 对应的本次任务。\n'
       + JSON.stringify({ history, current_user: current })
     : current;
-  return { system: systems.join('\n\n') || ' ', query, stream: body.stream === true, includeUsage: body.stream_options?.include_usage === true };
+  return { generation, system: systems.join('\n\n') || ' ', query, stream: body.stream === true, includeUsage: body.stream_options?.include_usage === true };
 }
 
 export function completion(text, finishReason = 'stop') {

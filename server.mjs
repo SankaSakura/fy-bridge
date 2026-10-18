@@ -59,7 +59,7 @@ const json = (res, status, value) => {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
 };
-const failure = (res, e) => json(res, e.status || 500, { error: { message: e.message || '桥接内部错误', type: 'bridge_error', code: e.code || 'bridge_error', param: null } });
+const failure = (res, e) => json(res, e.status || 500, { error: { message: e.message || '桥接内部错误', type: 'bridge_error', code: e.code || 'bridge_error', param: e.param || null } });
 const authenticated = req => {
   const value = Buffer.from(req.headers.authorization?.replace(/^Bearer /, '') || '');
   const expected = Buffer.from(token);
@@ -95,12 +95,15 @@ function cancel(job, reason, status = 504, code = 'cancelled_or_timeout') {
 function claim(req, res, id) {
   if (claimWaiter) throw new BridgeError(409, 'worker_busy', '已有一个扩展后台正在领取任务。');
   if (worker && worker.id !== id && Date.now() - worker.seen < 45000) throw new BridgeError(409, 'worker_busy', '只能连接一个扩展后台。');
-  worker = { id, seen: Date.now() };
+  worker = { id, seen: Date.now(), generationParameters: req.headers['x-fy-generation-parameters'] === '1' };
   const deliver = () => {
     if (res.destroyed || res.writableEnded) return true;
-    while (queue.length && (queue[0].settled || queue[0].deadline <= Date.now())) {
+    while (queue.length && (queue[0].settled || queue[0].deadline <= Date.now() || queue[0].generationRequired && !worker?.generationParameters)) {
       const skipped = queue.shift();
-      if (!skipped.settled) cancel(skipped, '请求在队列中超时，未发起生成。');
+      if (!skipped.settled) {
+        if (skipped.generationRequired && !worker?.generationParameters) cancel(skipped, '扩展不支持生成参数，请重新加载更新后的扩展；未发起生成。', 409, 'extension_upgrade_required');
+        else cancel(skipped, '请求在队列中超时，未发起生成。');
+      }
     }
     if (dirty || active || !queue.length) return false;
     const job = queue.shift();
@@ -121,7 +124,7 @@ function wake() {
 }
 function owner(req, job) {
   if (!job || req.headers['x-bridge-worker'] !== job.worker) throw new BridgeError(409, 'job_not_owned', '任务不存在，或由另一个扩展后台处理。');
-  worker = { id: job.worker, seen: Date.now() };
+  worker = { id: job.worker, seen: Date.now(), generationParameters: req.headers['x-fy-generation-parameters'] === '1' };
 }
 function sendCompletion(res, mapped, output) {
   if (res.destroyed || res.writableEnded) return;
@@ -225,6 +228,7 @@ const server = http.createServer(async (req, res) => {
       if (result.error) settle(job, new BridgeError(502, 'fy_error', String(result.error).slice(0, 600)));
       else if (result.restored !== true) settle(job, new BridgeError(502, 'restore_failed', 'FY 原配置尚未恢复；请在扩展设置页完成恢复。'));
       else if (typeof result.text !== 'string' || !result.text.length || result.text.length > 4 * 1024 * 1024 || !['stop', 'length', 'content_filter'].includes(result.finishReason)) settle(job, new BridgeError(502, 'invalid_upstream_result', 'fy 回复格式不受支持。'));
+      else if (job.generationRequired && (!result.generationApplied || typeof result.generationApplied !== 'object' || Array.isArray(result.generationApplied) || Object.keys(result.generationApplied).length !== Object.keys(job.generation).length || Object.entries(job.generation).some(([key, value]) => result.generationApplied[key] !== value))) settle(job, new BridgeError(502, 'generation_not_confirmed', '页面没有确认全部生成参数已保存，不能将此回复作为符合请求的结果。请查看 FY 已有结果，不会自动重发。'));
       else settle(job, null, { text: result.text, finishReason: result.finishReason });
       jobs.delete(job.id);
       active = null;
@@ -251,10 +255,12 @@ const server = http.createServer(async (req, res) => {
       const clientRequest = await body(req);
       const mapped = mapRequest(clientRequest);
       if (dirty || !worker || Date.now() - worker.seen > 45000) throw new BridgeError(503, 'browser_not_ready', '扩展后台当前不可用。');
+      const generationRequired = Object.keys(mapped.generation).length > 0;
+      if (generationRequired && !worker.generationParameters) throw new BridgeError(409, 'extension_upgrade_required', '请重新加载支持生成参数的 FY 扩展，再重新启动反代；本次未发起生成。');
       if (queue.filter(j => !j.settled).length >= 8) throw new BridgeError(429, 'queue_full', '桥接队列已满。');
       let resolve, reject;
       const result = new Promise((yes, no) => { resolve = yes; reject = no; });
-      const job = { id: randomUUID(), appId, deadline: Date.now() + timeoutSeconds * 1000, payload: { system: mapped.system, query: mapped.query }, resolve, reject, settled: false, cancelled: false };
+      const job = { generationRequired, generation: mapped.generation, id: randomUUID(), appId, deadline: Date.now() + timeoutSeconds * 1000, payload: { system: mapped.system, query: mapped.query, generation: mapped.generation }, resolve, reject, settled: false, cancelled: false };
       jobs.set(job.id, job);
       res.on('close', () => { if (!job.settled) cancel(job, '客户端已断开；不会自动重发，网站上已开始的生成仍可能扣费。'); });
       // Attach the rejection handler before disk I/O can yield to cancellation.

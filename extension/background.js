@@ -33,7 +33,7 @@ async function request(route, payload, signal) {
   if (!connection) throw new Error('本地服务尚未连接。');
   const res = await fetch(connection.base + route, {
     method: payload === undefined ? 'GET' : 'POST', cache: 'no-store', redirect: 'error',
-    headers: { Authorization: 'Bearer ' + connection.token, 'X-Bridge-Worker': workerId,
+    headers: { Authorization: 'Bearer ' + connection.token, 'X-Bridge-Worker': workerId, 'X-FY-Generation-Parameters': '1',
       ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
     signal: signal || AbortSignal.timeout(10000),
@@ -304,8 +304,9 @@ async function perform(job) {
     if (job.appId !== connection.appId) throw new Error('服务的专用卡与后台选择不同，请停止反代后重新连接。');
     currentTab = await findTab(job.appId);
     if ((await chrome.storage.local.get('recovery')).recovery) throw new Error('尚有未恢复的配置备份。');
-    const prepared = await page('prepare', { appId: job.appId, deadline: Math.min(job.deadline, Date.now() + 20000) });
+    const prepared = await page('prepare', { appId: job.appId, generation: job.generation, deadline: Math.min(job.deadline, Date.now() + 20000) });
     if (prepared.error || !prepared.original) throw new Error(prepared.error || '无法取得原配置备份。');
+    if (Object.keys(job.generation ?? {}).length && prepared.generationProtocol !== 1) throw new Error('页面适配器尚未更新，无法传递生成参数；请重新加载扩展。未开始生成。');
     if (cancelRequested || !running || Date.now() >= job.deadline) throw new Error('请求在生成前已取消或超时。');
     // Persist only the original configuration, not the incoming prompt/query.
     if (prepared.conversationId !== null && (typeof prepared.conversationId !== 'string' || !prepared.conversationId)) throw new Error('网站当前会话格式不受支持，未发起生成。');
