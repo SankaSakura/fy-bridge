@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BridgeError, MODEL, mapRequest, completion } from './protocol.mjs';
 import { bridgeDataDirectory } from './local-paths.mjs';
+import { createTrafficLog } from './traffic-log.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('FY 本地反代需要 Node.js 22 或更高版本。');
@@ -28,6 +29,11 @@ if (appId !== null && !appId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 const dataDir = await bridgeDataDirectory(root);
 await mkdir(dataDir, { recursive: true });
+const appendTraffic = await createTrafficLog(dataDir);
+async function logTraffic(record) {
+  try { await appendTraffic(record); }
+  catch (error) { console.error('FY traffic log write failed:', error.message); }
+}
 const tokenFile = path.join(dataDir, 'token.txt');
 let token;
 try { token = (await readFile(tokenFile, 'utf8')).trim(); }
@@ -188,12 +194,33 @@ const server = http.createServer(async (req, res) => {
       owner(req, job);
       return json(res, 200, { cancelled: job.cancelled, deadline: job.deadline });
     }
+    if (req.method === 'POST' && url.pathname === '/bridge/traffic') {
+      const value = await body(req, 16 * 1024 * 1024);
+      if (!value || typeof value.captureId !== 'string' || !value.captureId.match(/^[0-9a-f-]{36}$/)
+        || !['prepare', 'run', 'recover'].includes(value.action)
+        || !value.record || typeof value.record !== 'object' || Array.isArray(value.record)
+        || !['request', 'response_headers', 'response_chunk', 'response_end', 'transport_error'].includes(value.record.kind)) {
+        throw new BridgeError(400, 'invalid_traffic_record', 'Invalid traffic log record.');
+      }
+      const id = req.headers['x-bridge-worker'];
+      if (typeof id !== 'string' || !id.match(/^[a-zA-Z0-9-]{1,80}$/)) throw new BridgeError(400, 'worker_required', 'Missing traffic worker.');
+      if (value.jobId) {
+        const job = jobs.get(value.jobId);
+        owner(req, job);
+        if (active !== job) throw new BridgeError(409, 'job_not_active', 'Traffic job is not active.');
+      } else if (worker && worker.id !== id && Date.now() - worker.seen < 45000) {
+        throw new BridgeError(409, 'worker_not_owned', 'Traffic worker is not current.');
+      }
+      await appendTraffic({ workerId: id, ...value });
+      return json(res, 200, { recorded: true });
+    }
     if (req.method === 'POST' && url.pathname === '/bridge/result') {
       const result = await body(req, 8 * 1024 * 1024);
       if (!result || typeof result !== 'object' || Array.isArray(result)) throw new BridgeError(400, 'invalid_result', '任务结果必须是 JSON 对象。');
       const job = jobs.get(result.id);
       owner(req, job);
       if (active !== job) throw new BridgeError(409, 'job_not_active', '任务不是当前活动任务。');
+      await logTraffic({ jobId: job.id, appId: job.appId, kind: 'bridge_result', result });
       if (result.restored !== true) dirty = true;
       if (result.error) settle(job, new BridgeError(502, 'fy_error', String(result.error).slice(0, 600)));
       else if (result.restored !== true) settle(job, new BridgeError(502, 'restore_failed', 'FY 原配置尚未恢复；请在扩展设置页完成恢复。'));
@@ -221,17 +248,24 @@ const server = http.createServer(async (req, res) => {
       if (dirty) throw new BridgeError(423, 'restore_required', '上次任务未确认恢复配置；请先在扩展设置页完成恢复。');
       if (!worker || Date.now() - worker.seen > 45000) throw new BridgeError(503, 'browser_offline', '扩展后台未连接。请打开 FY 扩展设置查看连接状态。');
       if (queue.filter(j => !j.settled).length >= 8) throw new BridgeError(429, 'queue_full', '桥接队列已满。');
-      const mapped = mapRequest(await body(req));
+      const clientRequest = await body(req);
+      const mapped = mapRequest(clientRequest);
       if (dirty || !worker || Date.now() - worker.seen > 45000) throw new BridgeError(503, 'browser_not_ready', '扩展后台当前不可用。');
       if (queue.filter(j => !j.settled).length >= 8) throw new BridgeError(429, 'queue_full', '桥接队列已满。');
       let resolve, reject;
       const result = new Promise((yes, no) => { resolve = yes; reject = no; });
       const job = { id: randomUUID(), appId, deadline: Date.now() + timeoutSeconds * 1000, payload: { system: mapped.system, query: mapped.query }, resolve, reject, settled: false, cancelled: false };
       jobs.set(job.id, job);
-      queue.push(job);
       res.on('close', () => { if (!job.settled) cancel(job, '客户端已断开；不会自动重发，网站上已开始的生成仍可能扣费。'); });
+      // Attach the rejection handler before disk I/O can yield to cancellation.
+      const outcome = result.then(output => ({ output }), error => ({ error }));
+      await logTraffic({ jobId: job.id, appId, kind: 'client_request', body: clientRequest, mapped: job.payload });
+      if (!job.settled && !res.destroyed) queue.push(job);
+      else if (!job.settled) cancel(job, '客户端已断开；请求未发送。');
       wake();
-      sendCompletion(res, mapped, await result);
+      const settled = await outcome;
+      if (settled.error) throw settled.error;
+      sendCompletion(res, mapped, settled.output);
       return;
     }
     throw new BridgeError(404, 'not_found', '接口不存在。');

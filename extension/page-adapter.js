@@ -58,20 +58,100 @@ export async function fyPage(action, input) {
     'X-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
   };
   let streamFailure = null;
-  async function read(response) {
+  let trafficSequence = 0, exchangeSequence = 0, trafficUnavailable = false;
+  async function recordTraffic(record) {
+    if (!input.trafficChannel || trafficUnavailable) return;
+    const sequence = ++trafficSequence;
+    await new Promise(resolve => {
+      const finish = error => {
+        clearTimeout(timeout);
+        window.removeEventListener('message', receive);
+        if (error) {
+          trafficUnavailable = true;
+          console.error('FY traffic log unavailable:', error);
+        }
+        resolve();
+      };
+      const receive = event => {
+        const value = event.data;
+        if (event.source === window && event.origin === location.origin
+          && value?.type === 'fy-bridge-traffic-ack' && value.channel === input.trafficChannel
+          && value.sequence === sequence) finish(value.ok ? null : value.error || 'Log write failed.');
+      };
+      const timeout = setTimeout(() => finish('Log write timed out.'), 12000);
+      window.addEventListener('message', receive);
+      window.postMessage({ type: 'fy-bridge-traffic', channel: input.trafficChannel, sequence,
+        record: { ...record, sequence, emittedAt: new Date().toISOString() } }, location.origin);
+    });
+  }
+  function encodeBytes(bytes) {
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    }
+    return btoa(binary);
+  }
+  async function read(response, exchangeId) {
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    let text = '', size = 0, chunkNumber = 0, complete = false, readError = null;
+    try {
+      while (reader) {
+        const next = await reader.read();
+        if (next.done) break;
+        const byteOffset = size;
+        size += next.value.byteLength;
+        // Bound each relay message, not the recorded response. Base64 retains
+        // exact bytes even when a UTF-8 character spans transport chunks.
+        for (let offset = 0; offset < next.value.length; offset += 65536) {
+          const bytes = next.value.subarray(offset, offset + 65536);
+          const decoded = decoder.decode(bytes, { stream: true });
+          text += decoded;
+          await recordTraffic({ kind: 'response_chunk', exchangeId, chunkNumber: ++chunkNumber,
+            byteOffset: byteOffset + offset, byteLength: bytes.length, text: decoded, base64: encodeBytes(bytes) });
+        }
+        if (size > 8 * 1024 * 1024) { await reader.cancel(); throw new Error('fy 回复超过 8 MiB。'); }
+      }
+      complete = true;
+    } catch (error) {
+      readError = String(error.message || error);
+      throw error;
+    } finally {
+      const decoderTail = decoder.decode();
+      text += decoderTail;
+      await recordTraffic({ kind: 'response_end', exchangeId, complete, bytesReceived: size,
+        chunks: chunkNumber, decoderTail, error: readError });
+      reader?.releaseLock();
+    }
+    return text;
+  }
+  async function exchange(route, payload, signal = controller.signal) {
+    const exchangeId = `${input.trafficChannel || input.id || action}:${++exchangeSequence}`;
+    const method = payload === undefined ? 'GET' : 'POST';
+    const requestBody = payload === undefined ? null : JSON.stringify(payload);
+    await recordTraffic({ kind: 'request', exchangeId, method, url: '/go/api' + route, headers, body: requestBody });
+    let response, text;
+    try {
+      response = await fetch('/go/api' + route, {
+        method, credentials: 'include', redirect: 'error', cache: 'no-store', headers, signal,
+        ...(requestBody === null ? {} : { body: requestBody }),
+      });
+      const responseHeaders = {};
+      for (const name of ['content-type', 'content-length', 'content-encoding', 'date', 'x-request-id', 'request-id']) {
+        const value = response.headers.get(name);
+        if (value !== null) responseHeaders[name] = value;
+      }
+      await recordTraffic({ kind: 'response_headers', exchangeId, status: response.status,
+        statusText: response.statusText, headers: responseHeaders });
+      text = await read(response, exchangeId);
+    } catch (error) {
+      await recordTraffic({ kind: 'transport_error', exchangeId, error: String(error.message || error), aborted: signal.aborted });
+      throw error;
+    }
+    // Read and record HTTP error bodies before reporting the existing error.
     if (!response.ok) throw new Error(`fy HTTP ${response.status}；请确认登录和专用卡权限。`);
     if (response.redirected) throw new Error('fy 请求被重定向；请重新登录。');
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let text = '', size = 0;
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      size += next.value.byteLength;
-      if (size > 8 * 1024 * 1024) { await reader.cancel(); throw new Error('fy 回复超过 8 MiB。'); }
-      text += decoder.decode(next.value, { stream: true });
-    }
-    return text + decoder.decode();
+    return { response, text };
   }
   function unwrap(value) {
     if (value && Object.hasOwn(value, 'code')) {
@@ -81,12 +161,8 @@ export async function fyPage(action, input) {
     return value;
   }
   async function api(route, payload, signal = controller.signal) {
-    const response = await fetch('/go/api' + route, {
-      method: payload === undefined ? 'GET' : 'POST', credentials: 'include',
-      redirect: 'error', cache: 'no-store', headers, signal,
-      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
-    });
-    return unwrap(JSON.parse(await read(response)));
+    const { text } = await exchange(route, payload, signal);
+    return unwrap(JSON.parse(text));
   }
   const conversationFields = () => targetConversationId ? { conversation_id: targetConversationId } : {};
   const getConfig = signal => api('/apps/config?app_id=' + encodeURIComponent(input.appId) + (targetConversationId ? '&conversation_id=' + encodeURIComponent(targetConversationId) : ''), undefined, signal);
@@ -117,14 +193,10 @@ export async function fyPage(action, input) {
   }
   async function generate(query) {
     requireCurrentConversation();
-    const response = await fetch('/go/api/apps/chat-messages', {
-      method: 'POST', credentials: 'include', redirect: 'error', headers,
-      signal: controller.signal,
-      // Append to the website's selected conversation. Context still comes
-      // entirely from the client; debug must confirm this conversation uses memory 0.
-      body: JSON.stringify({ app_id: input.appId, ...conversationFields(), inputs: {}, query, response_mode: 'blocking' }),
+    // Context comes entirely from the client; debug must confirm memory 0.
+    const { response, text } = await exchange('/apps/chat-messages', {
+      app_id: input.appId, ...conversationFields(), inputs: {}, query, response_mode: 'blocking',
     });
-    const text = await read(response);
     if (!response.headers.get('content-type')?.includes('text/event-stream')) {
       const data = unwrap(JSON.parse(text));
       if (!data || typeof data.answer !== 'string' || !data.answer.length || data.status >= 400 || data.error) throw new Error('FY 没有返回完整回复，请先在网站查看是否已有结果。');
@@ -202,12 +274,12 @@ export async function fyPage(action, input) {
       const config = await getConfig();
       if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('fy 配置结构发生变化。');
       requireCurrentConversation();
-      return { original: project(config), conversationId: targetConversationId };
+      return { original: project(config), conversationId: targetConversationId, trafficLogIncomplete: trafficUnavailable };
     }
     if (action === 'recover') {
       if (window[slot]?.busy) throw new Error('页面上的原任务仍在生成或恢复，请等待结束后再恢复。');
       await restore(input.original, null, true);
-      return { restored: true };
+      return { restored: true, trafficLogIncomplete: trafficUnavailable };
     }
     if (action !== 'run') throw new Error('未知桥接操作。');
     if (window[slot]?.busy) throw new Error('专用卡已有桥接任务。');
@@ -255,5 +327,6 @@ export async function fyPage(action, input) {
       delete result.text;
     }
   }
+  if (trafficUnavailable) result.trafficLogIncomplete = true;
   return result;
 }

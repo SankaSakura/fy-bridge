@@ -1,5 +1,6 @@
 import { fyPage } from './page-adapter.js';
 import { cardAddress, listCardTabs, serviceAddress } from './cards.js';
+import { fyTrafficRelay } from './traffic-relay.js';
 
 const workerId = crypto.randomUUID();
 let running = false, busy = false, connecting = false, polling = false, stopping = false;
@@ -10,6 +11,7 @@ let managedService = false, serverDirty = false, stopIncomplete = false;
 let statusText = '反代未启动', detailText = '请填写连接配置，然后点击“启动反代”。';
 let connectAttempt = 0;
 const views = new Set();
+const trafficCaptures = new Map();
 const boot = chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
 async function state() {
   const saved = await chrome.storage.local.get(['pairedConnection', 'cardUrl', 'recovery', 'autoConnect']);
@@ -43,11 +45,39 @@ async function request(route, payload, signal) {
 }
 async function page(action, input, tabId = currentTab) {
   if (!Number.isInteger(tabId)) throw new Error('专用卡标签未连接。');
-  const result = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: fyPage, args: [action, input] });
-  const value = result[0]?.result;
-  if (!value || typeof value !== 'object') throw new Error('浏览器未返回桥接结果。');
-  return value;
+  if (action === 'cancel') {
+    const result = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: fyPage, args: [action, input] });
+    return result[0]?.result;
+  }
+  const channel = crypto.randomUUID();
+  trafficCaptures.set(channel, { tabId, action, appId: input.appId, jobId: input.id || activeJob?.id || null });
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', func: fyTrafficRelay, args: [channel] });
+    const result = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: fyPage, args: [action, { ...input, trafficChannel: channel }] });
+    const value = result[0]?.result;
+    if (!value || typeof value !== 'object') throw new Error('浏览器未返回桥接结果。');
+    if (value.trafficLogIncomplete) console.error('FY traffic log is incomplete for capture:', channel);
+    return value;
+  } finally {
+    trafficCaptures.delete(channel);
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', func: fyTrafficRelay, args: [channel, true] }).catch(() => {});
+  }
 }
+
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message?.action !== 'traffic-record') return false;
+  const capture = trafficCaptures.get(message.channel);
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !capture || sender.tab?.id !== capture.tabId) {
+    reply({ ok: false, error: 'Traffic capture is no longer active.' }); return false;
+  }
+  const { tabId, ...metadata } = capture;
+  request('/bridge/traffic', { captureId: message.channel, ...metadata, record: message.record })
+    .then(() => reply({ ok: true }), error => {
+      console.error('FY traffic log write failed:', error.message);
+      reply({ ok: false, error: error.message });
+    });
+  return true;
+});
 async function findTab(appId, open = false) {
   let candidates = (await listCardTabs()).filter(item => item.card.appId === appId);
   if (!candidates.length && open) {
