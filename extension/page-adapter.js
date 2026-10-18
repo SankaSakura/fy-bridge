@@ -57,6 +57,7 @@ export async function fyPage(action, input) {
     'Content-Type': 'application/json', 'X-Language': 'zh-Hans',
     'X-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
   };
+  let streamFailure = null;
   async function read(response) {
     if (!response.ok) throw new Error(`fy HTTP ${response.status}；请确认登录和专用卡权限。`);
     if (response.redirected) throw new Error('fy 请求被重定向；请重新登录。');
@@ -136,12 +137,28 @@ export async function fyPage(action, input) {
     // The website consumes data lines and completes on a normal stream EOF.
     // read() above must finish successfully; transport failures still reject.
     let answer = '', finishReason = 'stop', conversationId = null;
-    function consume(raw) {
-      if (raw.trim() === '[DONE]') return;
+    function consume(raw, frameNumber, dataLine = null) {
+      // Empty SSE data is a valid keepalive, not a JSON message. This also
+      // applies to empty lines in the site's unseparated data-line format.
+      if (!raw.trim() || raw.trim() === '[DONE]') return;
       let event;
       try { event = unwrap(JSON.parse(raw)); }
       catch (error) {
-        if (error instanceof SyntaxError) throw new Error('fy 回复流包含无法解析的数据；不会自动重发。');
+        if (error instanceof SyntaxError) {
+          // Keep bounded evidence for this failed call; never return a partial
+          // answer as a successful completion or submit another generation.
+          streamFailure = {
+            at: new Date().toISOString(), appId: input.appId,
+            conversationId: conversationId || targetConversationId || createdConversationId,
+            contentType: response.headers.get('content-type'), frameNumber, dataLine,
+            streamCharacters: text.length, receivedAnswerCharacters: answer.length,
+            partialAnswer: answer.slice(0, 65536), partialAnswerTruncated: answer.length > 65536,
+            malformedData: raw.slice(0, 512), malformedDataTruncated: raw.length > 512,
+          };
+          throw new Error(answer.length
+            ? 'fy 回复未能完整读取，已收到部分正文；请先在 FY 查看已有回复，不会自动重发。'
+            : 'fy 回复流包含无法解析的数据；请先在 FY 查看已有回复，不会自动重发。');
+        }
         throw error;
       }
       if (!event || typeof event !== 'object' || !event.event || event.event === 'error' || event.status >= 400 || event.error) throw new Error('fy 生成流返回错误或不支持的事件结构。');
@@ -157,7 +174,9 @@ export async function fyPage(action, input) {
         finishReason = event.finish_reason ?? event.metadata?.finish_reason ?? 'stop';
       }
     }
+    let frameNumber = 0;
     for (const frame of text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split(/\n\n+/)) {
+      frameNumber++;
       const lines = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart());
       if (!lines.length) continue;
       const raw = lines.join('\n');
@@ -167,8 +186,8 @@ export async function fyPage(action, input) {
       if (!combined) {
         try { JSON.parse(raw); combined = true; } catch { /* Individual data lines below. */ }
       }
-      if (combined) consume(raw);
-      else for (const line of lines) consume(line);
+      if (combined) consume(raw, frameNumber);
+      else for (const [index, line] of lines.entries()) consume(line, frameNumber, index + 1);
     }
     if (!answer.length) throw new Error('FY 没有返回回复正文。请先在网站查看是否已有结果，再决定是否重新提交。');
     if (!['stop', 'length', 'content_filter'].includes(finishReason)) throw new Error('fy 返回未知结束原因；不会自动重发。');
@@ -210,6 +229,7 @@ export async function fyPage(action, input) {
     result = { ...await generate(input.query), restored: false };
   } catch (error) {
     result = { error: controller.signal.aborted ? '任务取消或超时；已开始的生成可能扣费，不会自动重发。' : String(error.message || 'fy 操作失败'), restored: !changed };
+    if (streamFailure) result.streamFailure = streamFailure;
   } finally {
     clearTimeout(timer);
     if (changed) {

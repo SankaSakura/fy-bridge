@@ -292,6 +292,13 @@ async function perform(job) {
     result = { error: String(error.message || '桥接失败'), restored: !inRun };
   } finally {
     clearInterval(monitor);
+    if (result.streamFailure) {
+      // Session-only evidence belongs to the failed job, never to a retry.
+      // Storage failure must not interrupt configuration recovery/result delivery.
+      try { await chrome.storage.session.set({ lastStreamFailure: { jobId: job.id, ...result.streamFailure } }); }
+      catch (error) { console.warn('FY stream diagnostics could not be saved:', error.message); }
+      delete result.streamFailure;
+    }
     if (backupWritten && result.restored === true) await chrome.storage.local.remove('recovery');
     if (result.restored !== true) running = false;
     try {
